@@ -11,7 +11,9 @@ interface ToolDefinition {
   execute: (
     toolCallId: string,
     params: Record<string, unknown>,
-    signal: AbortSignal,
+    signal: AbortSignal | undefined,
+    onUpdate: ((partialResult: unknown) => void) | undefined,
+    ctx: unknown,
   ) => Promise<unknown>;
 }
 
