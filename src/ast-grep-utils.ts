@@ -10,12 +10,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 /**
- * Map a file path to an ast-grep Lang enum value.
+ * Map a file path to an ast-grep language string.
+ * Supports built-in NAPI languages (TypeScript, JavaScript, Tsx)
+ * plus dynamically registered languages (python, bash, swift).
  * Returns undefined if no matching language.
  */
 export function getAstGrepLang(filePath: string): string | undefined {
   const ext = path.extname(filePath).toLowerCase();
   const map: Record<string, string> = {
+    // Built-in @ast-grep/napi languages
     ".ts": "TypeScript",
     ".tsx": "Tsx",
     ".js": "JavaScript",
@@ -24,6 +27,18 @@ export function getAstGrepLang(filePath: string): string | undefined {
     ".cjs": "JavaScript",
     ".mts": "TypeScript",
     ".cts": "TypeScript",
+    // Dynamically registered via @ast-grep/lang-* packages
+    ".py": "python",
+    ".py3": "python",
+    ".pyi": "python",
+    ".bzl": "python",
+    ".sh": "bash",
+    ".bash": "bash",
+    ".bats": "bash",
+    ".zsh": "bash",
+    ".ksh": "bash",
+    ".env": "bash",
+    ".swift": "swift",
   };
   return map[ext];
 }

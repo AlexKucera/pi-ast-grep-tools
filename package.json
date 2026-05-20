@@ -1,6 +1,6 @@
 {
-  "name": "@davehardy20/pi-ast-grep-tools",
-  "version": "0.1.0",
+  "name": "@yourgpt/pi-ast-grep-tools",
+  "version": "0.2.0",
   "description": "Pi package for structural code search and replace using AST matching via ast-grep.",
   "type": "module",
   "keywords": [
@@ -13,12 +13,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/davehardy20/pi-ast-grep-tools.git"
+    "url": "git+https://github.com/yourgpt/pi-ast-grep-tools.git"
   },
   "bugs": {
-    "url": "https://github.com/davehardy20/pi-ast-grep-tools/issues"
+    "url": "https://github.com/yourgpt/pi-ast-grep-tools/issues"
   },
-  "homepage": "https://github.com/davehardy20/pi-ast-grep-tools#readme",
+  "homepage": "https://github.com/yourgpt/pi-ast-grep-tools#readme",
   "publishConfig": {
     "access": "public"
   },
@@ -35,7 +35,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ast-grep/napi": "^0.42.2"
+    "@ast-grep/napi": "^0.42.3",
+    "@ast-grep/lang-python": "^0.0.6",
+    "@ast-grep/lang-bash": "^0.0.8",
+    "@ast-grep/lang-swift": "^0.0.8"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
