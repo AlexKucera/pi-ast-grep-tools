@@ -5,7 +5,8 @@
  * - ast_grep_search: Find code patterns using AST matching
  * - ast_grep_replace: Find and replace code patterns using AST matching
  *
- * Uses @ast-grep/napi for fast native AST parsing.
+ * Uses @ast-grep/napi for fast native AST parsing, with dynamically registered
+ * languages (Python, Bash, Swift) via @ast-grep/lang-* packages.
  *
  * Package status command:
  * - /ast-grep-status: show package name, version, source path, and status
@@ -14,7 +15,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { findInFiles, Lang } from "@ast-grep/napi";
+import { findInFiles, Lang, registerDynamicLanguage } from "@ast-grep/napi";
+import langPython from "@ast-grep/lang-python";
+import langBash from "@ast-grep/lang-bash";
+import langSwift from "@ast-grep/lang-swift";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -26,6 +30,7 @@ import {
   langName,
 } from "./ast-grep-utils.js";
 import { normalizePath } from "./path-utils.js";
+import { formatHashlineLine, computeLineHash } from "./hashline.js";
 
 // ── Package metadata ──────────────────────────────────────────────────
 
@@ -62,12 +67,31 @@ function getPackageMetadata(): PackageMetadata {
 
 // ── Language helpers ───────────────────────────────────────────────────
 
-function resolveLang(filePath: string): Lang | null {
+// All supported language names (built-in enum + dynamically registered)
+const SUPPORTED_LANGUAGES = [
+  // Built-in @ast-grep/napi Lang enum values
+  "TypeScript", "JavaScript", "Tsx",
+  // Dynamically registered via @ast-grep/lang-* packages
+  "python", "bash", "swift",
+] as const;
+
+type SupportedLang = (typeof SUPPORTED_LANGUAGES)[number];
+
+function resolveLang(filePath: string): string | null {
   const langStr = getAstGrepLang(filePath);
   if (!langStr) return null;
+  // Accept both built-in Lang enum values and dynamic language strings
+  if (SUPPORTED_LANGUAGES.includes(langStr as any)) return langStr;
+  // Also check the Lang enum for built-in languages
   return (Lang as Record<string, Lang>)[langStr] ?? null;
 }
-
+/**
+ * Format an ast-grep match as a hashline-anchored line compatible
+ * with pi-hashline-edit's read()/edit() tools.
+ *
+ * Output format: "  12#MQ:actual source line content"
+ * (matches pi-hashline-edit's formatHashlineRegion exactly)
+ */
 function formatMatch(
   node: {
     text(): string;
@@ -77,16 +101,41 @@ function formatMatch(
     };
   },
   filePath: string,
-  index: number,
+  fileCache: Map<string, string[]>,
 ): string {
   const range = node.range();
   const startLine = range.start.line + 1;
-  const startCol = range.start.column + 1;
   const endLine = range.end.line + 1;
-  const endCol = range.end.column + 1;
-  const text = node.text().replace(/\s+/g, " ").trim();
-  const preview = text.length > 80 ? `${text.substring(0, 80)}...` : text;
-  return `${index + 1}. ${filePath}:${startLine}:${startCol}-${endLine}:${endCol}\n   ${preview}`;
+
+  // Read file lines from cache (or load and cache)
+  let lines = fileCache.get(filePath);
+  if (!lines) {
+    try {
+      const raw = fs.readFileSync(filePath, "utf8");
+      lines = raw.split("\n");
+      // Remove trailing empty line caused by trailing newline
+      if (raw.endsWith("\n")) lines.pop();
+      fileCache.set(filePath, lines);
+    } catch {
+      // Fallback if file can't be read — return plain text format
+      const text = node.text().replace(/\s+/g, " ").trim();
+      const preview = text.length > 80 ? text.substring(0, 80) + "..." : text;
+      return `${startLine}:${range.start.column + 1}-${endLine}:${range.end.column + 1}\n   ${preview}`;
+    }
+  }
+
+  // Format each matched line as a hashline anchor
+  const lineWidth = String(Math.max(startLine, endLine)).length;
+  const parts: string[] = [];
+  for (let ln = startLine; ln <= endLine; ln++) {
+    if (ln <= lines.length) {
+      parts.push(formatHashlineLine(ln, lines[ln - 1], lineWidth));
+    } else {
+      // Line out of range (shouldn't happen but be safe)
+      parts.push(`${String(ln).padStart(lineWidth)}??:${node.text().trim()}`);
+    }
+  }
+  return parts.join("\n");
 }
 
 // ── Shared helpers (exported for testability) ─────────────────────────
@@ -101,10 +150,15 @@ export function resolveSearchPaths(
 export function detectLanguage(
   searchPaths: string[],
   explicitLanguage?: string,
-): Lang {
+): string {
   if (explicitLanguage) {
-    const lang = (Lang as Record<string, Lang>)[explicitLanguage] ?? null;
-    if (lang) return lang;
+    const normalized = explicitLanguage.trim();
+    // Accept both built-in Lang enum values and dynamic language strings
+    if ((Lang as Record<string, Lang>)[normalized]) return normalized;
+    if (SUPPORTED_LANGUAGES.includes(normalized as any)) return normalized;
+    throw new Error(
+      `Unknown language "${normalized}". Supported: ${[...SUPPORTED_LANGUAGES].join(", ")}.`,
+    );
   }
 
   for (const sp of searchPaths) {
@@ -122,7 +176,7 @@ export function detectLanguage(
   }
 
   throw new Error(
-    "No supported language detected in search paths. ast-grep supports: TypeScript, JavaScript, TSX.",
+    `No supported language detected in search paths. Supported: ${[...SUPPORTED_LANGUAGES].join(", ")}.`,
   );
 }
 
@@ -158,6 +212,15 @@ function collectDir(dir: string, out: string[]): void {
 // ── Extension ──────────────────────────────────────────────────────────
 
 export default function astGrepToolsExtension(pi: ExtensionAPI) {
+  // Register all dynamically-loaded languages in a SINGLE call.
+  // BUG: @ast-grep/napi's registerDynamicLanguage only honors the first call;
+  // subsequent calls are silently ignored. All dynamic languages must be
+  // registered in one object literal.
+  try {
+    registerDynamicLanguage({ python: langPython, bash: langBash, swift: langSwift });
+  } catch (e) {
+    console.warn("[pi-ast-grep-tools] Failed to register dynamic languages:", e);
+  }
   function sendVisibleMessage(
     content: string,
     details?: Record<string, unknown>,
@@ -180,7 +243,7 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
         [
           `${metadata.name} v${metadata.version}`,
           `source: ${metadata.sourcePath}`,
-          `supported: TypeScript, JavaScript, TSX`,
+          `supported: TypeScript, JavaScript, TSX, Python, Bash, Swift`,
         ].join("\n"),
         {
           packageName: metadata.name,
@@ -198,7 +261,7 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
     name: "ast_grep_search",
     label: "AST Grep Search",
     description:
-      "Search for code patterns using AST (abstract syntax tree) matching. More precise than text search. Supports TypeScript, JavaScript, TSX. Pattern syntax is language-specific AST pattern syntax (e.g. `console.log($A)` matches any console.log call).",
+      "Search for code patterns using AST (abstract syntax tree) matching. More precise than text search. Supports TypeScript, JavaScript, TSX, Python, Bash, Swift. Pattern syntax is language-specific AST pattern syntax (e.g. `console.log($A)` matches any console.log call, `def $NAME($$$ARGS):` matches any Python function).",
     promptSnippet: "Use ast_grep_search to find structural code patterns.",
     promptGuidelines: [
       "Use ast_grep_search when you need structural code matching that text search (grep) cannot reliably find.",
@@ -208,7 +271,7 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
     parameters: Type.Object({
       pattern: Type.String({
         description:
-          "AST pattern to match (e.g. 'console.log($A)', 'function $NAME() { }')",
+          "AST pattern to match (e.g. 'console.log($A)', 'function $NAME() { }', 'def $NAME($$$ARGS):', 'echo $CMD')",
       }),
       paths: Type.Array(Type.String(), {
         description:
@@ -218,7 +281,7 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
       language: Type.Optional(
         Type.String({
           description:
-            "Language override: TypeScript, JavaScript, or Tsx. Auto-detected from file extensions if not specified.",
+            "Language override: TypeScript, JavaScript, Tsx, python, bash, swift. Auto-detected from file extensions if not specified.",
         }),
       ),
       limit: Type.Optional(
@@ -257,6 +320,7 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
         };
       }
 
+      const fileCache = new Map<string, string[]>();
       const results: string[] = [];
       let matchCount = 0;
 
@@ -269,7 +333,7 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
         (_err, nodes) => {
           for (const node of nodes) {
             const file = node.getRoot().filename() ?? "unknown";
-            results.push(formatMatch(node, file, matchCount));
+            results.push(formatMatch(node, file, fileCache));
             matchCount++;
           }
         },
@@ -290,7 +354,8 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
       const limit = params.limit ?? 50;
       const capped = limit > 0 && results.length > limit;
       const display = limit > 0 ? results.slice(0, limit) : results;
-      let text = `Found ${matchCount} match(es) for "${params.pattern}":\n\n${display.join("\n\n")}`;
+
+      let text = `Found ${matchCount} match(es) for "${params.pattern}":\n\n${display.join("\n")}`;
       if (capped) {
         text += `\n\n... and ${results.length - limit} more (use limit:0 for all)`;
       }
@@ -334,7 +399,8 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
       }),
       language: Type.Optional(
         Type.String({
-          description: "Language override: TypeScript, JavaScript, or Tsx",
+          description:
+            "Language override: TypeScript, JavaScript, Tsx, python, bash, swift. Auto-detected from file extensions if not specified.",
         }),
       ),
     }),
