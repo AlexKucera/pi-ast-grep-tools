@@ -11,21 +11,25 @@ import langBash from "@ast-grep/lang-bash";
 import langSwift from "@ast-grep/lang-swift";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { computeLineHash, formatHashlineLine, formatHashlineRegion } from "../dist/hashline.js";
 import { getAstGrepLang } from "../dist/ast-grep-utils.js";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const FIXTURES_DIR = path.join(__dirname, "fixtures");
+
 // ── Test infrastructure ──────────────────────────────────────────────
 
-var passed = 0;
-var failed = 0;
+let passed = 0;
+let failed = 0;
 
 function assert(label, condition, detail) {
   detail = detail || "";
   if (condition) {
-    console.log("  \u2705 " + label);
+    console.log("  ✅ " + label);
     passed++;
   } else {
-    console.log("  \u274C " + label + (detail ? " \u2014 " + detail : ""));
+    console.log("  ❌ " + label + (detail ? " — " + detail : ""));
     failed++;
   }
 }
@@ -53,18 +57,18 @@ try {
 section("2. Hash Algorithm (pi-hashline-edit compatible)");
 
 (function() {
-  var h = computeLineHash(1, "hello world");
+  const h = computeLineHash(1, "hello world");
   assert("Hash is 2 chars", h.length === 2, "got len=" + h.length + " [" + h + "]");
   assert("Uses custom alphabet (no hex a-f)",
     !/[a-f0-9]{2}/.test(h),
     `got [${h}] - contains hex digits`);
-  var hBlank5 = computeLineHash(5, "");
-  var hBlank10 = computeLineHash(10, "");
+  const hBlank5 = computeLineHash(5, "");
+  const hBlank10 = computeLineHash(10, "");
   assert("Blank lines get unique hashes",
     hBlank5 !== hBlank10,
     `line5=[${hBlank5}] line10=[${hBlank10}] - should differ`);
-  var hSig1 = computeLineHash(1, "def foo():");
-  var hSig99 = computeLineHash(99, "def foo():");
+  const hSig1 = computeLineHash(1, "def foo():");
+  const hSig99 = computeLineHash(99, "def foo():");
   assert("Significant lines ignore line number seed",
     hSig1 === hSig99,
     `line1=[${hSig1}] line99=[${hSig99}] - should be identical`);
@@ -75,7 +79,7 @@ section("2. Hash Algorithm (pi-hashline-edit compatible)");
 section("3. Output Format");
 
 (function() {
-  var line = formatHashlineLine(12, "  def hello(): pass", 3);
+  const line = formatHashlineLine(12, "  def hello(): pass", 3);
   assert("Format: starts with line number + #",
     /^\s*\d+#/.test(line), "got [" + line.substring(0, 15) + "]");
   assert("Format: has # separator",
@@ -86,204 +90,197 @@ section("3. Output Format");
     line.endsWith("def hello(): pass"), "got [" + line.slice(-25) + "]");
 })();
 
-// ── 4. Cross-check vs installed pi-hashline-edit ───────────────────
+// ── 4. Cross-check hashlines against fixture files ───────────────────
 
-section("4. Hash Compatibility vs Installed pi-hashline-edit");
+section("4. Hash Compatibility Against Fixture Files");
 
-var testFiles = [
-  "/Users/alex/Projects/scripting/tinkertoys/python/lib/hash_for_file.py",
-  "/Users/alex/Projects/scripting/tinkertoys/bash/lib/common.sh",
-  "/Users/alex/Projects/ios_development/dialysispal/dialysisPal/Models/PatientProfile.swift",
+const testFiles = [
+  path.join(FIXTURES_DIR, "sample.py"),
+  path.join(FIXTURES_DIR, "sample.sh"),
+  path.join(FIXTURES_DIR, "sample.swift"),
 ];
 
-for (var ti = 0; ti < testFiles.length; ti++) {
+for (const filePath of testFiles) {
   (function(filePath) {
-    var fileName = path.basename(filePath);
+    const fileName = path.basename(filePath);
     try {
-      var raw = fs.readFileSync(filePath, "utf8");
-      var lines = raw.split("\n");
+      const raw = fs.readFileSync(filePath, "utf8");
+      const lines = raw.split("\n");
       if (raw.endsWith("\n")) lines.pop();
-      var sampleCount = Math.min(5, lines.length);
-      var ourOutput = formatHashlineRegion(lines.slice(0, sampleCount), 1);
+      const sampleCount = Math.min(5, lines.length);
+      const ourOutput = formatHashlineRegion(lines.slice(0, sampleCount), 1);
 
       // Verify structure: each line should be "  N#XX:content"
-      var ourLines = ourOutput.split("\n");
-      var allValid = true;
-      for (var li = 0; li < ourLines.length; li++) {
+      const ourLines = ourOutput.split("\n");
+      let allValid = true;
+      let failedLine = 0;
+      for (let li = 0; li < ourLines.length; li++) {
         if (!/^\s*\d+#[A-Z]{2}:/.test(ourLines[li])) {
           allValid = false;
+          failedLine = li + 1;
           break;
         }
       }
 
       assert(fileName + ": " + ourLines.length + " valid hashlines produced", allValid,
-        "line " + (li+1) + ": [" + (ourLines[li] || "(none)") + "]");
+        "line " + failedLine + ": [" + (ourLines[failedLine - 1] || "(none)") + "]");
       console.log("    Sample: " + ourLines[0]);
     } catch (e) {
       assert(fileName + ": readable", false, e.message);
     }
-  })(testFiles[ti]);
+  })(filePath);
 }
 
 // ── 5. End-to-end: search produces valid editable anchors ───────────
 
 section("5. End-to-End: Search Produces Editable Anchors");
 
-// Python
 (async function() {
-  var results = [];
-  var fileCache = new Map();
+  // Python: search for function definitions in fixture
+  const pyResults = [];
+  const pyFileCache = new Map();
 
   await findInFiles(
     "python",
     {
-      paths: ["/Users/alex/Projects/scripting/tinkertoys/python/lib"],
-      matcher: { rule: { pattern: "def $NAME($$$ARGS)" } },
+      paths: [FIXTURES_DIR],
+      matcher: { rule: { pattern: "def $NAME($ARGS)" } },
     },
-    function(_err, nodes) {
-      for (var ni = 0; ni < nodes.length; ni++) {
-        var node = nodes[ni];
-        var filePath = node.getRoot().filename();
-        var range = node.range();
-        var startLine = range.start.line + 1;
-        var endLine = range.end.line + 1;
+    (_err, nodes) => {
+      for (const node of nodes) {
+        const filePath = node.getRoot().filename();
+        const range = node.range();
+        const startLine = range.start.line + 1;
+        const endLine = range.end.line + 1;
 
-        var lines = fileCache.get(filePath);
+        let lines = pyFileCache.get(filePath);
         if (!lines) {
-          var raw = fs.readFileSync(filePath, "utf8");
+          const raw = fs.readFileSync(filePath, "utf8");
           lines = raw.split("\n");
           if (raw.endsWith("\n")) lines.pop();
-          fileCache.set(filePath, lines);
+          pyFileCache.set(filePath, lines);
         }
 
-        var lineWidth = String(Math.max(startLine, endLine)).length;
-        var parts = [];
-        for (var ln = startLine; ln <= endLine && ln <= lines.length; ln++) {
+        const lineWidth = String(Math.max(startLine, endLine)).length;
+        const parts = [];
+        for (let ln = startLine; ln <= endLine && ln <= lines.length; ln++) {
           parts.push(formatHashlineLine(ln, lines[ln - 1], lineWidth));
         }
 
-        results.push({
+        pyResults.push({
           file: path.basename(filePath),
           anchor: parts[0],
-          startLine: startLine,
+          startLine,
         });
       }
-    }
+    },
   );
 
-  assert("Python: found matches with hashlines", results.length > 0,
-    "found " + results.length);
+  assert("Python: found matches with hashlines", pyResults.length > 0,
+    "found " + pyResults.length);
 
-  var anchorRe = /^(\d+)#([A-Z]{2}):/;
-  for (var ri = 0; ri < results.length; ri++) {
-    var r = results[ri];
-    var m = r.anchor.match(anchorRe);
+  const anchorRe = /^(\d+)#([A-Z]{2}):/;
+  for (let ri = 0; ri < pyResults.length; ri++) {
+    const r = pyResults[ri];
+    const m = r.anchor.match(anchorRe);
     assert("Python result " + (ri+1) + ": valid LINE#HASH anchor",
       !!m && m[1] && m[2], "got [" + r.anchor + "]");
     console.log("    -> " + r.anchor);
   }
-})();
 
-// Bash
-(async function() {
-  var results = [];
-  var fileCache = new Map();
+  // Bash: search for function definitions in fixture
+  const bashResults = [];
+  const bashFileCache = new Map();
 
   await findInFiles(
     "bash",
     {
-      paths: ["/Users/alex/Projects/scripting/tinkertoys/bash/lib"],
+      paths: [FIXTURES_DIR],
       matcher: { rule: { pattern: "echo $MSG" } },
     },
-    function(_err, nodes) {
-      for (var ni = 0; ni < nodes.length; ni++) {
-        var node = nodes[ni];
-        var filePath = node.getRoot().filename();
-        var range = node.range();
-        var startLine = range.start.line + 1;
+    (_err, nodes) => {
+      for (const node of nodes) {
+        const filePath = node.getRoot().filename();
+        const range = node.range();
+        const startLine = range.start.line + 1;
 
-        var lines = fileCache.get(filePath);
+        let lines = bashFileCache.get(filePath);
         if (!lines) {
-          var raw = fs.readFileSync(filePath, "utf8");
+          const raw = fs.readFileSync(filePath, "utf8");
           lines = raw.split("\n");
           if (raw.endsWith("\n")) lines.pop();
-          fileCache.set(filePath, lines);
+          bashFileCache.set(filePath, lines);
         }
 
-        var lineWidth = String(startLine).length;
-        results.push({
+        const lineWidth = String(startLine).length;
+        bashResults.push({
           file: path.basename(filePath),
           anchor: formatHashlineLine(startLine, lines[startLine - 1], lineWidth),
-          startLine: startLine,
+          startLine,
         });
       }
-    }
+    },
   );
 
-  assert("Bash: found matches with hashlines", results.length > 0,
-    "found " + results.length);
+  assert("Bash: found matches with hashlines", bashResults.length > 0,
+    "found " + bashResults.length);
 
-  var anchorRe = /^(\d+)#([A-Z]{2}):/;
-  for (var ri = 0; ri < Math.min(3, results.length); ri++) {
-    var r = results[ri];
-    var m = r.anchor.match(anchorRe);
+  for (let ri = 0; ri < Math.min(3, bashResults.length); ri++) {
+    const r = bashResults[ri];
+    const m = r.anchor.match(anchorRe);
     assert("Bash result " + (ri+1) + ": valid LINE#HASH", !!m, "got [" + r.anchor + "]");
     console.log("    -> " + r.anchor);
   }
-})();
 
-// Swift
-(async function() {
-  var results = [];
-  var fileCache = new Map();
+  // Swift: search for property declarations in fixture
+  const swiftResults = [];
+  const swiftFileCache = new Map();
 
   await findInFiles(
     "swift",
     {
-      paths: ["/Users/alex/Projects/ios_development/dialysispal/dialysisPal/Models/PatientProfile.swift"],
-      matcher: { rule: { pattern: "var $NAME: $TYPE = $INIT" } },
+      paths: [FIXTURES_DIR],
+      matcher: { rule: { pattern: "var $NAME: $TYPE" } },
     },
-    function(_err, nodes) {
-      for (var ni = 0; ni < nodes.length; ni++) {
-        var node = nodes[ni];
-        var filePath = node.getRoot().filename();
-        var range = node.range();
-        var startLine = range.start.line + 1;
+    (_err, nodes) => {
+      for (const node of nodes) {
+        const filePath = node.getRoot().filename();
+        const range = node.range();
+        const startLine = range.start.line + 1;
 
-        var lines = fileCache.get(filePath);
+        let lines = swiftFileCache.get(filePath);
         if (!lines) {
-          var raw = fs.readFileSync(filePath, "utf8");
+          const raw = fs.readFileSync(filePath, "utf8");
           lines = raw.split("\n");
           if (raw.endsWith("\n")) lines.pop();
-          fileCache.set(filePath, lines);
+          swiftFileCache.set(filePath, lines);
         }
 
-        var lineWidth = String(startLine).length;
-        results.push({
+        const lineWidth = String(startLine).length;
+        swiftResults.push({
           anchor: formatHashlineLine(startLine, lines[startLine - 1], lineWidth),
-          startLine: startLine,
+          startLine,
         });
       }
-    }
+    },
   );
 
-  assert("Swift: found matches with hashlines", results.length > 0,
-    "found " + results.length);
+  assert("Swift: found matches with hashlines", swiftResults.length > 0,
+    "found " + swiftResults.length);
 
-  var anchorRe = /^(\d+)#([A-Z]{2}):/;
-  for (var ri = 0; ri < Math.min(3, results.length); ri++) {
-    var r = results[ri];
-    var m = r.anchor.match(anchorRe);
+  for (let ri = 0; ri < Math.min(3, swiftResults.length); ri++) {
+    const r = swiftResults[ri];
+    const m = r.anchor.match(anchorRe);
     assert("Swift result " + (ri+1) + ": valid LINE#HASH", !!m, "got [" + r.anchor + "]");
     console.log("    -> " + r.anchor);
   }
+
+  // ── Summary ──────────────────────────────────────────────────────
+
+  section("Summary");
+  console.log("  Passed: " + passed);
+  console.log("  Failed: " + failed);
+  console.log("  Total:  " + (passed + failed));
+
+  process.exit(failed > 0 ? 1 : 0);
 })();
-
-// ── Summary ────────────────────────────────────────────────────────────
-
-section("Summary");
-console.log("  Passed: " + passed);
-console.log("  Failed: " + failed);
-console.log("  Total:  " + (passed + failed));
-
-process.exit(failed > 0 ? 1 : 0);

@@ -14,6 +14,13 @@ import * as path from "node:path";
  * Supports built-in NAPI languages (TypeScript, JavaScript, Tsx)
  * plus dynamically registered languages (python, bash, swift).
  * Returns undefined if no matching language.
+ *
+ * **Known limitations:**
+ * - `.zsh` and `.ksh` are mapped to `bash`. Zsh/Ksh have syntax that diverges
+ *   from POSIX/bash (e.g. `^(...)` glob qualifiers, `[[` differences), so
+ *   valid zsh/ksh code may produce unexpected parse results.
+ * - `.bzl` (Starlark) is mapped to `python`. Starlark is a Python subset but
+ *   has its own semantics; results may be approximate for advanced features.
  */
 export function getAstGrepLang(filePath: string): string | undefined {
   const ext = path.extname(filePath).toLowerCase();
@@ -35,9 +42,9 @@ export function getAstGrepLang(filePath: string): string | undefined {
     ".sh": "bash",
     ".bash": "bash",
     ".bats": "bash",
+    // NOTE: .zsh and .ksh mapped to bash — see doc above for limitations
     ".zsh": "bash",
     ".ksh": "bash",
-    ".env": "bash",
     ".swift": "swift",
   };
   return map[ext];

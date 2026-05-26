@@ -30,7 +30,7 @@ import {
   langName,
 } from "./ast-grep-utils.js";
 import { normalizePath } from "./path-utils.js";
-import { formatHashlineLine, computeLineHash } from "./hashline.js";
+import { formatHashlineLine } from "./hashline.js";
 
 // ── Package metadata ──────────────────────────────────────────────────
 
@@ -82,8 +82,9 @@ function resolveLang(filePath: string): string | null {
   if (!langStr) return null;
   // Accept both built-in Lang enum values and dynamic language strings
   if (SUPPORTED_LANGUAGES.includes(langStr as any)) return langStr;
-  // Also check the Lang enum for built-in languages
-  return (Lang as Record<string, Lang>)[langStr] ?? null;
+  // Also check the Lang enum for built-in languages — normalize to string
+  const langEnum = (Lang as Record<string, Lang>)[langStr];
+  return typeof langEnum === "string" ? langEnum : null;
 }
 /**
  * Format an ast-grep match as a hashline-anchored line compatible
@@ -213,9 +214,10 @@ function collectDir(dir: string, out: string[]): void {
 
 export default function astGrepToolsExtension(pi: ExtensionAPI) {
   // Register all dynamically-loaded languages in a SINGLE call.
-  // BUG: @ast-grep/napi's registerDynamicLanguage only honors the first call;
+  // NOTE: @ast-grep/napi's registerDynamicLanguage only honors the first call;
   // subsequent calls are silently ignored. All dynamic languages must be
   // registered in one object literal.
+  // See: https://github.com/ast-grep/ast-grep/issues/XXXX
   try {
     registerDynamicLanguage({ python: langPython, bash: langBash, swift: langSwift });
   } catch (e) {

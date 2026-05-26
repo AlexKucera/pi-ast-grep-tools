@@ -371,8 +371,8 @@ describe("getAstGrepLang", () => {
 
   it("returns undefined for unknown extensions", async () => {
     const { getAstGrepLang } = await import("../src/ast-grep-utils.js");
-    expect(getAstGrepLang("file.py")).toBeUndefined();
     expect(getAstGrepLang("file.rs")).toBeUndefined();
+    expect(getAstGrepLang("file.xyz")).toBeUndefined();
   });
 });
 

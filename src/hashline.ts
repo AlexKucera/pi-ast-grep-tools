@@ -3,6 +3,10 @@
  *
  * Algorithm replicated verbatim from pi-hashline-edit (MIT, coctostan fork).
  * Uses xxhashjs (pure JS) and the custom ZPMQVRWSNKTXJBYH alphabet.
+ *
+ * **ESM-only**: This module uses top-level `await` for dynamic xxhashjs import.
+ * It cannot be loaded via `require()` / CommonJS. Pi extensions are ESM by default,
+ * so this is safe in the intended context.
  */
 
 let XXH: typeof import("xxhashjs") | null = null;

@@ -1,5 +1,5 @@
 {
-  "name": "@yourgpt/pi-ast-grep-tools",
+  "name": "@davehardy20/pi-ast-grep-tools",
   "version": "0.3.0",
   "description": "Pi package for structural code search and replace using AST matching via ast-grep.",
   "type": "module",
@@ -13,12 +13,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yourgpt/pi-ast-grep-tools.git"
+    "url": "git+https://github.com/davehardy20/pi-ast-grep-tools.git"
   },
   "bugs": {
-    "url": "https://github.com/yourgpt/pi-ast-grep-tools/issues"
+    "url": "https://github.com/davehardy20/pi-ast-grep-tools/issues"
   },
-  "homepage": "https://github.com/yourgpt/pi-ast-grep-tools#readme",
+  "homepage": "https://github.com/davehardy20/pi-ast-grep-tools#readme",
   "publishConfig": {
     "access": "public"
   },
