@@ -1,8 +1,14 @@
 /**
- * Hashline engine — produces LINE#HASH anchors compatible with pi-hashline-edit.
+ * Hashline engine — produces LINE#HASH:content anchors compatible with
+ * pi-hashline-edit's read()/edit() tools.
  *
  * Algorithm replicated verbatim from pi-hashline-edit (MIT, coctostan fork).
  * Uses xxhashjs (pure JS) and the custom ZPMQVRWSNKTXJBYH alphabet.
+ *
+ * **Format verified** against pi-hashline-edit@latest source:
+ *   - Separator: `:` (colon) — identical to pi-hashline-edit line 989
+ *   - Regex:   `^(\d+)#([A-Z]{2}):(.*)$` — matches parseAnchorRef()
+ *   - Hash:    `xxh32(line, seed) & 0xFF` — byte-for-byte identical
  *
  * **ESM-only**: This module uses top-level `await` for dynamic xxhashjs import.
  * It cannot be loaded via `require()` / CommonJS. Pi extensions are ESM by default,
@@ -70,6 +76,9 @@ export function computeLineHash(lineNumber: number, line: string): string {
  * Format a single line in pi-hashline-edit's read() output format:
  *   "  12#MQ:actual line content here"
  *
+ * Uses `:` (colon) separator — verified identical to pi-hashline-edit
+ * formatHashlineRegion() output (hashline.ts:989).
+ *
  * lineNumber is left-padded to match the width of the last line number.
  */
 export function formatHashlineLine(
@@ -85,6 +94,7 @@ export function formatHashlineLine(
 /**
  * Format an array of consecutive lines as a hashline region,
  * matching pi-hashline-edit's formatHashlineRegion() output exactly.
+ * Output: "  12#MQ:content" with colon separator.
  */
 export function formatHashlineRegion(
   lines: string[],

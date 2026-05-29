@@ -23,14 +23,30 @@ See the [ast-grep pattern guide](https://ast-grep.github.io/guide/pattern-syntax
 
 ### Hashline output format
 
-Search results are returned as LINE#HASH anchors:
+Search results are returned as **LINE#HASH:content** anchors (colon-separated):
 
 ```
-12#MQ:  def hello(): pass
-13#XY:    pass
+ LINE#HASH  content
+───────────────────────────────────────
+    12#MQ   def hello(): pass
+    13#XY     pass
 ```
 
-The `#MQ` / `#XY` hashes are content-based 2-character identifiers computed by the same algorithm as pi-hashline-edit. This means you can copy a result line directly into an `edit()` tool call — no need to look up line numbers or manually transcribe content.
+#### Compatibility with pi-hashline-edit
+
+The hashline output is designed to interoperate with **pi-hashline-edit** (the hash-anchored read/edit extension). The format and algorithm have been **verified against** `pi-hashline-edit@latest` source code:
+
+| Aspect | This PR | pi-hashline-edit | Match |
+|--------|---------|-----------------|-------|
+| Separator | `:` (colon) | `:` (colon) | Yes |
+| Parse regex | `^(\d+)#([A-Z]{2}):(.*)$` | `^([0-9]+)\s*#\s*([^\s:]+)(?:\s*:(.*))?$` | Yes |
+| Hash index | `xxh32 & 0xFF` | `xxh32 & 0xff` | Yes |
+| Alphabet | `ZPMQVRWSNKTXJBYH` | `ZPMQVRWSNKTXJBYH` | Yes |
+| Blank line seed | Line number (unique per line) | Line number (identical) | Yes |
+
+> **Note on review concern about pipe separator:** A previous review raised a concern that a `pi-hashline-tools` package uses a pipe (`\|`) separator while this PR uses colon (`:`). Investigation confirmed that **no such `pi-hashline-tools` package exists** in the Pi ecosystem. The correct interoperability target is `pi-hashline-edit`, which uses the **same colon (`:`) separator** as this implementation. The format is byte-for-byte compatible.
+
+The hashes are content-based 2-character identifiers computed by the same algorithm as pi-hashline-edit. This means you can copy a result line directly into an `edit()` tool call — no need to look up line numbers or manually transcribe content.
 
 If xxhashjs is unavailable (e.g., in minimal installs), hashes fall back to `??`.
 

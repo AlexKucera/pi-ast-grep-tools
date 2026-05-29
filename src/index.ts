@@ -354,7 +354,7 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
   // NOTE: @ast-grep/napi's registerDynamicLanguage only honors the first call;
   // subsequent calls are silently ignored. All dynamic languages must be
   // registered in one object literal.
-  // See: https://github.com/ast-grep/ast-grep/issues/XXXX
+  // See: https://github.com/ast-grep/ast-grep/issues/2669
   try {
     registerDynamicLanguage({ python: langPython, bash: langBash, swift: langSwift });
   } catch (e) {
