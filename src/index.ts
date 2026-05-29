@@ -65,7 +65,11 @@ function getPackageMetadata(): PackageMetadata {
   return cachedPackageMetadata;
 }
 
-// ── Language helpers ───────────────────────────────────────────────────
+// ── Output caps and language helpers ───────────────────────────────────
+
+const DEFAULT_MATCH_LIMIT = 50;
+const DEFAULT_MAX_CHARS = 6000;
+const DEFAULT_REPLACE_REPORT_FILE_LIMIT = 50;
 
 // All supported language names (built-in enum + dynamically registered)
 const SUPPORTED_LANGUAGES = [
@@ -76,6 +80,42 @@ const SUPPORTED_LANGUAGES = [
 ] as const;
 
 type SupportedLang = (typeof SUPPORTED_LANGUAGES)[number];
+
+function normalizeLimit(value: number | undefined, fallback: number): number {
+  return value === undefined ? fallback : Math.max(0, Math.floor(value));
+}
+
+function normalizeMaxChars(value: number | undefined): number {
+  return value === undefined ? DEFAULT_MAX_CHARS : Math.max(0, Math.floor(value));
+}
+
+function capText(text: string, maxChars: number, recoveryHint: string): {
+  text: string;
+  cappedByChars: boolean;
+} {
+  if (maxChars === 0 || text.length <= maxChars) {
+    return { text, cappedByChars: false };
+  }
+
+  const marker = `\n\n... output truncated to ${maxChars} chars. ${recoveryHint}`;
+  const suffix = marker.length > maxChars ? marker.slice(0, maxChars) : marker;
+  const keep = Math.max(0, maxChars - suffix.length);
+  return {
+    text: `${text.slice(0, keep).trimEnd()}${suffix}`,
+    cappedByChars: true,
+  };
+}
+
+function capStringDetailsByChars(items: string[], maxChars: number): string[] {
+  if (maxChars === 0) return items;
+  const capped: string[] = [];
+  for (const item of items) {
+    const next = [...capped, item];
+    if (JSON.stringify(next).length > maxChars) break;
+    capped.push(item);
+  }
+  return capped;
+}
 
 function resolveLang(filePath: string): string | null {
   const langStr = getAstGrepLang(filePath);
@@ -137,6 +177,103 @@ function formatMatch(
     }
   }
   return parts.join("\n");
+}
+
+export function formatSearchReport(
+  pattern: string,
+  formattedMatches: string[],
+  limit = DEFAULT_MATCH_LIMIT,
+  maxChars = DEFAULT_MAX_CHARS,
+): {
+  text: string;
+  matches: string[];
+  total: number;
+  capped: boolean;
+  cappedByChars: boolean;
+} {
+  const normalizedLimit = normalizeLimit(limit, DEFAULT_MATCH_LIMIT);
+  const cappedByCount = normalizedLimit > 0 && formattedMatches.length > normalizedLimit;
+  const display = normalizedLimit > 0 ? formattedMatches.slice(0, normalizedLimit) : formattedMatches;
+  let text = `Found ${formattedMatches.length} match(es) for "${pattern}":\n\n${display.join("\n\n")}`;
+  if (cappedByCount) {
+    text += `\n\n... and ${formattedMatches.length - normalizedLimit} more match(es) (use limit:0 for all)`;
+  }
+  const normalizedMaxChars = normalizeMaxChars(maxChars);
+  const cappedText = capText(
+    text,
+    normalizedMaxChars,
+    "Use maxChars:0 or a higher maxChars for raw search output.",
+  );
+  return {
+    text: cappedText.text,
+    matches: cappedText.cappedByChars
+      ? capStringDetailsByChars(display, normalizedMaxChars)
+      : display,
+    total: formattedMatches.length,
+    capped: cappedByCount || cappedText.cappedByChars,
+    cappedByChars: cappedText.cappedByChars,
+  };
+}
+
+export function formatReplaceReport(
+  matchCount: number,
+  fileCount: number,
+  results: string[],
+  modifiedFiles: string[],
+  maxReportFiles = DEFAULT_REPLACE_REPORT_FILE_LIMIT,
+  maxChars = DEFAULT_MAX_CHARS,
+): {
+  text: string;
+  results: string[];
+  modifiedFiles: string[];
+  totalModifiedFiles: number;
+  capped: boolean;
+  cappedByChars: boolean;
+  displayModifiedFiles: string[];
+} {
+  const normalizedLimit = normalizeLimit(maxReportFiles, DEFAULT_REPLACE_REPORT_FILE_LIMIT);
+  const cappedByCount = normalizedLimit > 0 && results.length > normalizedLimit;
+  const displayResults = normalizedLimit > 0 ? results.slice(0, normalizedLimit) : results;
+  const displayModifiedFiles = normalizedLimit > 0
+    ? modifiedFiles.slice(0, normalizedLimit)
+    : modifiedFiles;
+  const lines = [
+    `Replaced ${matchCount} match(es) in ${fileCount} file(s):`,
+    "",
+    displayResults.join("\n"),
+  ];
+  if (cappedByCount) {
+    lines.push(
+      `\n... and ${results.length - normalizedLimit} more modified file report(s) (use maxReportFiles:0 for all)`,
+    );
+  }
+  lines.push(
+    "",
+    `Modified files (${modifiedFiles.length}${cappedByCount ? `, showing ${displayModifiedFiles.length}` : ""}):`,
+    ...displayModifiedFiles.map((file) => `  ${file}`),
+  );
+  if (cappedByCount) {
+    lines.push("  ... use maxReportFiles:0 for the full modified-file list");
+  }
+  const normalizedMaxChars = normalizeMaxChars(maxChars);
+  const cappedText = capText(
+    lines.join("\n"),
+    normalizedMaxChars,
+    "Use maxChars:0 or a higher maxChars for the full replace report.",
+  );
+  return {
+    text: cappedText.text,
+    results: cappedText.cappedByChars
+      ? capStringDetailsByChars(displayResults, normalizedMaxChars)
+      : displayResults,
+    modifiedFiles,
+    displayModifiedFiles: cappedText.cappedByChars
+      ? capStringDetailsByChars(displayModifiedFiles, normalizedMaxChars)
+      : displayModifiedFiles,
+    totalModifiedFiles: modifiedFiles.length,
+    capped: cappedByCount || cappedText.cappedByChars,
+    cappedByChars: cappedText.cappedByChars,
+  };
 }
 
 // ── Shared helpers (exported for testability) ─────────────────────────
@@ -289,7 +426,13 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
       limit: Type.Optional(
         Type.Number({
           description: "Maximum matches to return (0 = unlimited)",
-          default: 50,
+          default: DEFAULT_MATCH_LIMIT,
+        }),
+      ),
+      maxChars: Type.Optional(
+        Type.Number({
+          description: "Maximum characters in the text output (0 = unlimited)",
+          default: DEFAULT_MAX_CHARS,
         }),
       ),
     }),
@@ -300,6 +443,7 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
         paths: string[];
         language?: string;
         limit?: number;
+        maxChars?: number;
       },
       _signal: AbortSignal,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -353,22 +497,21 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
         };
       }
 
-      const limit = params.limit ?? 50;
-      const capped = limit > 0 && results.length > limit;
-      const display = limit > 0 ? results.slice(0, limit) : results;
-
-      let text = `Found ${matchCount} match(es) for "${params.pattern}":\n\n${display.join("\n")}`;
-      if (capped) {
-        text += `\n\n... and ${results.length - limit} more (use limit:0 for all)`;
-      }
+      const report = formatSearchReport(
+        params.pattern,
+        results,
+        params.limit,
+        params.maxChars,
+      );
 
       return {
-        content: [{ type: "text", text }],
+        content: [{ type: "text", text: report.text }],
         details: {
           count: matchCount,
-          matches: display,
-          total: matchCount,
-          capped,
+          matches: report.matches,
+          total: report.total,
+          capped: report.capped,
+          cappedByChars: report.cappedByChars,
         },
       };
     },
@@ -386,6 +529,7 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
     promptGuidelines: [
       "Use ast_grep_replace instead of plain text replace when changing code patterns across multiple files to avoid syntax boundary violations.",
       "Use ast_grep_replace when the replacement must respect AST structure (e.g., renaming variables, wrapping expressions).",
+      "Replace reports and modified-file lists are capped at 50 files and 6000 characters by default. Use maxReportFiles:0 and/or maxChars:0 for full reports.",
     ],
     parameters: Type.Object({
       pattern: Type.String({
@@ -405,6 +549,18 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
             "Language override: TypeScript, JavaScript, Tsx, python, bash, swift. Auto-detected from file extensions if not specified.",
         }),
       ),
+      maxReportFiles: Type.Optional(
+        Type.Number({
+          description: "Maximum modified-file report entries to return (0 = unlimited)",
+          default: DEFAULT_REPLACE_REPORT_FILE_LIMIT,
+        }),
+      ),
+      maxChars: Type.Optional(
+        Type.Number({
+          description: "Maximum characters in the replace report (0 = unlimited)",
+          default: DEFAULT_MAX_CHARS,
+        }),
+      ),
     }),
     async execute(
       _toolCallId: string,
@@ -413,6 +569,8 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
         replacement: string;
         paths: string[];
         language?: string;
+        maxReportFiles?: number;
+        maxChars?: number;
       },
       _signal: AbortSignal,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -494,18 +652,25 @@ export default function astGrepToolsExtension(pi: ExtensionAPI) {
           );
         }
       }
+      const report = formatReplaceReport(
+        matchCount,
+        editsByFile.size,
+        results,
+        modifiedFiles,
+        params.maxReportFiles,
+        params.maxChars,
+      );
       return {
-        content: [
-          {
-            type: "text",
-            text: `Replaced ${matchCount} match(es) in ${editsByFile.size} file(s):\n\n${results.join("\n")}`,
-          },
-        ],
+        content: [{ type: "text", text: report.text }],
         details: {
           count: matchCount,
           files: editsByFile.size,
-          results,
-          modifiedFiles,
+          results: report.results,
+          modifiedFiles: report.modifiedFiles,
+          displayModifiedFiles: report.displayModifiedFiles,
+          totalModifiedFiles: report.totalModifiedFiles,
+          capped: report.capped,
+          cappedByChars: report.cappedByChars,
         },
       };
     },

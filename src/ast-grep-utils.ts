@@ -2,8 +2,6 @@
  * AST-Grep Utilities (package-local)
  *
  * Helpers for language mapping, edit application, and result formatting.
- * Duplicated from ~/.pi/agent/extensions/shared/ast-grep-utils.ts to
- * eliminate the cross-package shared import.
  */
 
 import * as fs from "node:fs";

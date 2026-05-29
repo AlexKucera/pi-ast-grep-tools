@@ -191,6 +191,70 @@ describe("@davehardy20/pi-ast-grep-tools", () => {
     }
   });
 
+  it("ast_grep_search caps long text with explicit maxChars recovery", async () => {
+    const pi = createMockPi();
+    astGrepExtension(pi as unknown as ExtensionAPI);
+
+    const tmpDir = fs.mkdtempSync("/tmp/pi-ast-grep-test-");
+    const tmpFile = `${tmpDir}/sample.ts`;
+    try {
+      fs.writeFileSync(
+        tmpFile,
+        `console.log("${"x".repeat(300)}");\nconsole.log("${"y".repeat(300)}");\n`,
+        "utf-8",
+      );
+
+      const tool = pi.tools.get("ast_grep_search")!;
+      const ctx = { cwd: tmpDir } as never;
+      const result = (await tool.execute(
+        "tc1",
+        { pattern: "console.log($A)", paths: [tmpFile], maxChars: 160 },
+        new AbortController().signal,
+        undefined,
+        ctx,
+      )) as {
+        content: Array<{ type: string; text: string }>;
+        details: { cappedByChars: boolean; matches: string[] };
+      };
+
+      expect(result.details.cappedByChars).toBe(true);
+      expect(JSON.stringify(result.details.matches).length).toBeLessThanOrEqual(160);
+      expect(result.content[0].text.length).toBeLessThanOrEqual(160);
+      expect(result.content[0].text).toContain("Use maxChars:0");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ast_grep_search never exceeds very small maxChars when marker is longer than the cap", async () => {
+    const pi = createMockPi();
+    astGrepExtension(pi as unknown as ExtensionAPI);
+
+    const tmpDir = fs.mkdtempSync("/tmp/pi-ast-grep-test-");
+    const tmpFile = `${tmpDir}/sample.ts`;
+    try {
+      fs.writeFileSync(tmpFile, `console.log("${"x".repeat(300)}");\n`, "utf-8");
+
+      const tool = pi.tools.get("ast_grep_search")!;
+      const ctx = { cwd: tmpDir } as never;
+      const result = (await tool.execute(
+        "tc1",
+        { pattern: "console.log($A)", paths: [tmpFile], maxChars: 5 },
+        new AbortController().signal,
+        undefined,
+        ctx,
+      )) as {
+        content: Array<{ type: string; text: string }>;
+        details: { cappedByChars: boolean };
+      };
+
+      expect(result.details.cappedByChars).toBe(true);
+      expect(result.content[0].text.length).toBeLessThanOrEqual(5);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("ast_grep_replace applies replacements to files", async () => {
     const pi = createMockPi();
     astGrepExtension(pi as unknown as ExtensionAPI);
@@ -223,6 +287,105 @@ describe("@davehardy20/pi-ast-grep-tools", () => {
       const updated = fs.readFileSync(tmpFile, "utf-8");
       expect(updated).toContain('console.info("hello")');
       expect(updated).not.toContain('console.log("hello")');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ast_grep_replace caps modified-file reports but keeps counts and recovery", async () => {
+    const pi = createMockPi();
+    astGrepExtension(pi as unknown as ExtensionAPI);
+
+    const tmpDir = fs.mkdtempSync("/tmp/pi-ast-grep-test-");
+    try {
+      const files = ["a.ts", "b.ts", "c.ts"].map((name) => `${tmpDir}/${name}`);
+      for (const file of files) {
+        fs.writeFileSync(file, 'console.log("hello");\n', "utf-8");
+      }
+
+      const tool = pi.tools.get("ast_grep_replace")!;
+      const ctx = { cwd: tmpDir } as never;
+      const result = (await tool.execute(
+        "tc1",
+        {
+          pattern: 'console.log("hello")',
+          replacement: 'console.info("hello")',
+          paths: [tmpDir],
+          maxReportFiles: 2,
+          maxChars: 0,
+        },
+        new AbortController().signal,
+        undefined,
+        ctx,
+      )) as {
+        content: Array<{ type: string; text: string }>;
+        details: {
+          count: number;
+          files: number;
+          modifiedFiles: string[];
+          displayModifiedFiles: string[];
+          totalModifiedFiles: number;
+          capped: boolean;
+        };
+      };
+
+      expect(result.details.count).toBe(3);
+      expect(result.details.files).toBe(3);
+      expect(result.details.modifiedFiles).toHaveLength(3);
+      expect(result.details.displayModifiedFiles).toHaveLength(2);
+      expect(result.details.totalModifiedFiles).toBe(3);
+      expect(result.details.capped).toBe(true);
+      expect(result.content[0].text).toContain("Modified files (3, showing 2)");
+      expect(result.content[0].text).toContain("use maxReportFiles:0");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ast_grep_replace bounds details when maxChars truncates output", async () => {
+    const pi = createMockPi();
+    astGrepExtension(pi as unknown as ExtensionAPI);
+
+    const tmpDir = fs.mkdtempSync("/tmp/pi-ast-grep-test-");
+    try {
+      const files = Array.from({ length: 12 }, (_, i) => `${tmpDir}/file-${i}.ts`);
+      for (const file of files) {
+        fs.writeFileSync(file, 'console.log("hello");\n', "utf-8");
+      }
+
+      const tool = pi.tools.get("ast_grep_replace")!;
+      const ctx = { cwd: tmpDir } as never;
+      const result = (await tool.execute(
+        "tc1",
+        {
+          pattern: 'console.log("hello")',
+          replacement: 'console.info("hello")',
+          paths: [tmpDir],
+          maxReportFiles: 0,
+          maxChars: 220,
+        },
+        new AbortController().signal,
+        undefined,
+        ctx,
+      )) as {
+        content: Array<{ type: string; text: string }>;
+        details: {
+          cappedByChars: boolean;
+          results: string[];
+          modifiedFiles: string[];
+          displayModifiedFiles: string[];
+          totalModifiedFiles: number;
+        };
+      };
+
+      expect(result.details.cappedByChars).toBe(true);
+      expect(result.details.totalModifiedFiles).toBe(12);
+      expect(JSON.stringify(result.details.results).length).toBeLessThanOrEqual(220);
+      expect(result.details.modifiedFiles).toHaveLength(12);
+      expect(JSON.stringify(result.details.displayModifiedFiles).length).toBeLessThanOrEqual(220);
+      expect(result.details.results.length).toBeLessThan(12);
+      expect(result.details.displayModifiedFiles.length).toBeLessThan(12);
+      expect(result.content[0].text.length).toBeLessThanOrEqual(220);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
