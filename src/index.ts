@@ -128,10 +128,10 @@ function resolveLang(filePath: string): string | null {
 }
 /**
  * Format an ast-grep match as a hashline-anchored line compatible
- * with pi-hashline-edit's read()/edit() tools.
+ * with @davehardy20/pi-hashline-tools' read_hashed() / hashline_edit().
  *
- * Output format: "  12#MQ:actual source line content"
- * (matches pi-hashline-edit's formatHashlineRegion exactly)
+ * Output format: "12#MQ|actual source line content"
+ * (matches pi-hashline-tools' formatHashLine exactly)
  */
 function formatMatch(
   node: {
@@ -165,15 +165,14 @@ function formatMatch(
     }
   }
 
-  // Format each matched line as a hashline anchor
-  const lineWidth = String(Math.max(startLine, endLine)).length;
+  // Format each matched line as a hashline anchor (pi-hashline-tools format)
   const parts: string[] = [];
   for (let ln = startLine; ln <= endLine; ln++) {
     if (ln <= lines.length) {
-      parts.push(formatHashlineLine(ln, lines[ln - 1], lineWidth));
+      parts.push(formatHashlineLine(ln, lines[ln - 1]));
     } else {
       // Line out of range (shouldn't happen but be safe)
-      parts.push(`${String(ln).padStart(lineWidth)}??:${node.text().trim()}`);
+      parts.push(`${ln}?|${node.text().trim()}`);
     }
   }
   return parts.join("\n");

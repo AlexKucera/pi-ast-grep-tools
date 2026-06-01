@@ -1,19 +1,22 @@
 /**
  * Hashline compatibility verification test.
  *
- * Verifies that our ast_grep_search output produces LINE#HASH anchors
- * that are byte-for-byte identical to what pi-hashline-edit's read() produces.
+ * Verifies that our ast_grep_search output produces LINE#HASH|content anchors
+ * that are byte-for-byte identical to what pi-hashline-tools' read_hashed() produces.
  */
 
-import { findInFiles, registerDynamicLanguage, parse } from "@ast-grep/napi";
+import { findInFiles, registerDynamicLanguage } from "@ast-grep/napi";
 import langPython from "@ast-grep/lang-python";
 import langBash from "@ast-grep/lang-bash";
 import langSwift from "@ast-grep/lang-swift";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { computeLineHash, formatHashlineLine, formatHashlineRegion } from "../dist/hashline.js";
-import { getAstGrepLang } from "../dist/ast-grep-utils.js";
+import {
+  computeLineHash,
+  formatHashlineLine,
+  formatHashlineRegion,
+} from "../dist/hashline.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = path.join(__dirname, "fixtures");
@@ -52,47 +55,100 @@ try {
   assert("Registration", false, e.message);
 }
 
-// ── 2. Hash algorithm self-test ─────────────────────────────────────
+// ── 2. Hash algorithm self-test (FNV-1a, matching pi-hashline-tools) ─
 
-section("2. Hash Algorithm (pi-hashline-edit compatible)");
+section("2. Hash Algorithm (pi-hashline-tools compatible)");
 
-(function() {
+(function () {
   const h = computeLineHash(1, "hello world");
-  assert("Hash is 2 chars", h.length === 2, "got len=" + h.length + " [" + h + "]");
-  assert("Uses custom alphabet (no hex a-f)",
+  assert(
+    "Hash is 2 chars",
+    h.length === 2,
+    "got len=" + h.length + " [" + h + "]"
+  );
+  assert(
+    "Uses custom alphabet (no hex a-f)",
     !/[a-f0-9]{2}/.test(h),
-    `got [${h}] - contains hex digits`);
+    `got [${h}] - contains hex digits`
+  );
+
+  // Blank lines return empty string (not usable as edit anchors)
   const hBlank5 = computeLineHash(5, "");
   const hBlank10 = computeLineHash(10, "");
-  assert("Blank lines get unique hashes",
-    hBlank5 !== hBlank10,
-    `line5=[${hBlank5}] line10=[${hBlank10}] - should differ`);
+  assert(
+    "Blank lines return empty string (no hash anchor)",
+    hBlank5 === "" && hBlank10 === "",
+    `line5=[${hBlank5}] line10=[${hBlank10}] - should be empty`
+  );
+
+  // Significant content ignores line number seed
   const hSig1 = computeLineHash(1, "def foo():");
   const hSig99 = computeLineHash(99, "def foo():");
-  assert("Significant lines ignore line number seed",
+  assert(
+    "Significant lines ignore line number seed",
     hSig1 === hSig99,
-    `line1=[${hSig1}] line99=[${hSig99}] - should be identical`);
+    `line1=[${hSig1}] line99=[${hSig99}] - should be identical`
+  );
 })();
 
-// ── 3. Output format verification ────────────────────────────────────
+// ── 3. Output format verification (pipe separator) ───────────────────
 
-section("3. Output Format");
+section("3. Output Format (LINE#HASH|content)");
 
-(function() {
-  const line = formatHashlineLine(12, "  def hello(): pass", 3);
-  assert("Format: starts with line number + #",
-    /^\s*\d+#/.test(line), "got [" + line.substring(0, 15) + "]");
-  assert("Format: has # separator",
-    line.indexOf("#") > 0, "missing # in [" + line + "]");
-  assert("Format: has : before content",
-    line.indexOf(":") > line.indexOf("#"), "missing content : in [" + line + "]");
-  assert("Format: ends with original content",
-    line.endsWith("def hello(): pass"), "got [" + line.slice(-25) + "]");
+(function () {
+  // formatHashlineLine no longer takes lineWidth arg
+  const line = formatHashlineLine(12, "  def hello(): pass");
+  assert(
+    "Format: starts with line number + #",
+    /^\d+#/.test(line),
+    "got [" + line.substring(0, 15) + "]"
+  );
+  assert(
+    "Format: has # separator between line and hash",
+    line.indexOf("#") > 0,
+    "missing # in [" + line + "]"
+  );
+  assert(
+    "Format: has | separator before content",
+    line.indexOf("|") > line.indexOf("#"),
+    "missing | content separator in [" + line + "]"
+  );
+  assert(
+    "Format: ends with original content",
+    line.endsWith("def hello(): pass"),
+    "got [" + line.slice(-25) + "]"
+  );
+  // No left-padding of line numbers
+  assert(
+    "Format: no leading whitespace on line number",
+    line.match(/^\d+/),
+    "line number should not be padded, got [" + line.substring(0, 5) + "]"
+  );
 })();
 
-// ── 4. Cross-check hashlines against fixture files ───────────────────
+// ── 4. Blank line format (no hash) ───────────────────────────────────
 
-section("4. Hash Compatibility Against Fixture Files");
+section("4. Blank Line Format");
+
+(function () {
+  const blankLine = formatHashlineLine(7, "");
+  assert(
+    'Blank line format: "LINE|content" (no #HASH)',
+    blankLine === "7|",
+    'got [' + blankLine + ']'
+  );
+
+  const whitespaceLine = formatHashlineLine(8, "   ");
+  assert(
+    'Whitespace-only line: "LINE|content" (no #HASH)',
+    whitespaceLine === "8|   ",
+    'got [' + whitespaceLine + ']'
+  );
+})();
+
+// ── 5. Cross-check hashlines against fixture files ───────────────────
+
+section("5. Hash Compatibility Against Fixture Files");
 
 const testFiles = [
   path.join(FIXTURES_DIR, "sample.py"),
@@ -101,7 +157,7 @@ const testFiles = [
 ];
 
 for (const filePath of testFiles) {
-  (function(filePath) {
+  (function (filePath) {
     const fileName = path.basename(filePath);
     try {
       const raw = fs.readFileSync(filePath, "utf8");
@@ -110,20 +166,27 @@ for (const filePath of testFiles) {
       const sampleCount = Math.min(5, lines.length);
       const ourOutput = formatHashlineRegion(lines.slice(0, sampleCount), 1);
 
-      // Verify structure: each line should be "  N#XX:content"
+      // Verify structure: each line should be "N#XX|content" or "N|content" (blank)
       const ourLines = ourOutput.split("\n");
       let allValid = true;
       let failedLine = 0;
       for (let li = 0; li < ourLines.length; li++) {
-        if (!/^\s*\d+#[A-Z]{2}:/.test(ourLines[li])) {
+        if (!/^\d+(?:#[A-Z]{2})?\|/.test(ourLines[li])) {
           allValid = false;
           failedLine = li + 1;
           break;
         }
       }
 
-      assert(fileName + ": " + ourLines.length + " valid hashlines produced", allValid,
-        "line " + failedLine + ": [" + (ourLines[failedLine - 1] || "(none)") + "]");
+      assert(
+        fileName + ": " + ourLines.length + " valid hashlines produced",
+        allValid,
+        "line " +
+          failedLine +
+          ": [" +
+          (ourLines[failedLine - 1] || "(none)") +
+          "]"
+      );
       console.log("    Sample: " + ourLines[0]);
     } catch (e) {
       assert(fileName + ": readable", false, e.message);
@@ -131,11 +194,11 @@ for (const filePath of testFiles) {
   })(filePath);
 }
 
-// ── 5. End-to-end: search produces valid editable anchors ───────────
+// ── 6. End-to-end: search produces valid editable anchors ───────────
 
-section("5. End-to-End: Search Produces Editable Anchors");
+section("6. End-to-End: Search Produces Editable Anchors");
 
-(async function() {
+(async function () {
   // Python: search for function definitions in fixture
   const pyResults = [];
   const pyFileCache = new Map();
@@ -161,10 +224,13 @@ section("5. End-to-End: Search Produces Editable Anchors");
           pyFileCache.set(filePath, lines);
         }
 
-        const lineWidth = String(Math.max(startLine, endLine)).length;
         const parts = [];
-        for (let ln = startLine; ln <= endLine && ln <= lines.length; ln++) {
-          parts.push(formatHashlineLine(ln, lines[ln - 1], lineWidth));
+        for (
+          let ln = startLine;
+          ln <= endLine && ln <= lines.length;
+          ln++
+        ) {
+          parts.push(formatHashlineLine(ln, lines[ln - 1]));
         }
 
         pyResults.push({
@@ -176,19 +242,26 @@ section("5. End-to-End: Search Produces Editable Anchors");
     },
   );
 
-  assert("Python: found matches with hashlines", pyResults.length > 0,
-    "found " + pyResults.length);
+  assert(
+    "Python: found matches with hashlines",
+    pyResults.length > 0,
+    "found " + pyResults.length
+  );
 
-  const anchorRe = /^(\d+)#([A-Z]{2}):/;
+  // Pipe separator regex: LINE#HASH|content
+  const anchorRe = /^(\d+)#([A-Z]{2})\|/;
   for (let ri = 0; ri < pyResults.length; ri++) {
     const r = pyResults[ri];
     const m = r.anchor.match(anchorRe);
-    assert("Python result " + (ri+1) + ": valid LINE#HASH anchor",
-      !!m && m[1] && m[2], "got [" + r.anchor + "]");
+    assert(
+      "Python result " + (ri + 1) + ": valid LINE#HASH| anchor",
+      !!m && m[1] && m[2],
+      "got [" + r.anchor + "]"
+    );
     console.log("    -> " + r.anchor);
   }
 
-  // Bash: search for function definitions in fixture
+  // Bash: search for echo statements in fixture
   const bashResults = [];
   const bashFileCache = new Map();
 
@@ -212,23 +285,29 @@ section("5. End-to-End: Search Produces Editable Anchors");
           bashFileCache.set(filePath, lines);
         }
 
-        const lineWidth = String(startLine).length;
         bashResults.push({
           file: path.basename(filePath),
-          anchor: formatHashlineLine(startLine, lines[startLine - 1], lineWidth),
+          anchor: formatHashlineLine(startLine, lines[startLine - 1]),
           startLine,
         });
       }
     },
   );
 
-  assert("Bash: found matches with hashlines", bashResults.length > 0,
-    "found " + bashResults.length);
+  assert(
+    "Bash: found matches with hashlines",
+    bashResults.length > 0,
+    "found " + bashResults.length
+  );
 
   for (let ri = 0; ri < Math.min(3, bashResults.length); ri++) {
     const r = bashResults[ri];
     const m = r.anchor.match(anchorRe);
-    assert("Bash result " + (ri+1) + ": valid LINE#HASH", !!m, "got [" + r.anchor + "]");
+    assert(
+      "Bash result " + (ri + 1) + ": valid LINE#HASH|",
+      !!m,
+      "got [" + r.anchor + "]"
+    );
     console.log("    -> " + r.anchor);
   }
 
@@ -256,22 +335,29 @@ section("5. End-to-End: Search Produces Editable Anchors");
           swiftFileCache.set(filePath, lines);
         }
 
-        const lineWidth = String(startLine).length;
         swiftResults.push({
-          anchor: formatHashlineLine(startLine, lines[startLine - 1], lineWidth),
+          file: path.basename(filePath),
+          anchor: formatHashlineLine(startLine, lines[startLine - 1]),
           startLine,
         });
       }
     },
   );
 
-  assert("Swift: found matches with hashlines", swiftResults.length > 0,
-    "found " + swiftResults.length);
+  assert(
+    "Swift: found matches with hashlines",
+    swiftResults.length > 0,
+    "found " + swiftResults.length
+  );
 
   for (let ri = 0; ri < Math.min(3, swiftResults.length); ri++) {
     const r = swiftResults[ri];
     const m = r.anchor.match(anchorRe);
-    assert("Swift result " + (ri+1) + ": valid LINE#HASH", !!m, "got [" + r.anchor + "]");
+    assert(
+      "Swift result " + (ri + 1) + ": valid LINE#HASH|",
+      !!m,
+      "got [" + r.anchor + "]"
+    );
     console.log("    -> " + r.anchor);
   }
 

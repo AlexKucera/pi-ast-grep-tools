@@ -1,107 +1,117 @@
 /**
- * Hashline engine — produces LINE#HASH:content anchors compatible with
- * pi-hashline-edit's read()/edit() tools.
+ * Hashline engine — produces LINE#HASH|content anchors compatible with
+ * @davehardy20/pi-hashline-tools' read_hashed() / hashline_edit() tools.
  *
- * Algorithm replicated verbatim from pi-hashline-edit (MIT, coctostan fork).
- * Uses xxhashjs (pure JS) and the custom ZPMQVRWSNKTXJBYH alphabet.
+ * Algorithm ported verbatim from davehardy20/pi-hashline-tools (MIT).
+ * Uses FNV-1a 32-bit hash with the custom ZPMQVRWSNKTXJBYH alphabet.
  *
- * **Format verified** against pi-hashline-edit@latest source:
- *   - Separator: `:` (colon) — identical to pi-hashline-edit line 989
- *   - Regex:   `^(\d+)#([A-Z]{2}):(.*)$` — matches parseAnchorRef()
- *   - Hash:    `xxh32(line, seed) & 0xFF` — byte-for-byte identical
- *
- * **ESM-only**: This module uses top-level `await` for dynamic xxhashjs import.
- * It cannot be loaded via `require()` / CommonJS. Pi extensions are ESM by default,
- * so this is safe in the intended context.
+ * **Format verified** against pi-hashline-tools@latest source:
+ *   - Separator: `|` (pipe) — identical to formatHashLine()
+ *   - Regex:    `^(\d+)#([ZPMQVRWSNKTXJBYH]{2})\|(.*)$`
+ *   - Hash:     FNV-1a 32-bit → `% 256` index into alphabet dict
+ *   - Blank lines: `LINE|content` (no hash, not usable as edit anchors)
  */
 
-let XXH: typeof import("xxhashjs") | null = null;
-try {
-  XXH = (await import("xxhashjs")).default ?? (await import("xxhashjs"));
-} catch {
-  // xxhashjs not available — hashline output will be disabled
-}
+// ── Hash alphabet (from pi-hashline-tools hashline-constants.ts) ─────────
 
-// ── Hash alphabet ──────────────────────────────────────────────────────
+/** Custom 16-character hash alphabet — excludes hex digits, confusables, vowels. */
+export const NIBBLE_STR = "ZPMQVRWSNKTXJBYH";
 
-/**
- * Custom 16-character hash alphabet. Deliberately excludes:
- * - Hex digits A–F (prevents confusion with hex literals in code)
- * - Visually confusable letters: D, G, I, L, O (look like digits 0, 6, 1, 1, 0)
- * - Common vowels A, E, I, O, U (prevents accidental English words)
- */
-const NIBBLE_STR = "ZPMQVRWSNKTXJBYH";
-
-const DICT = Array.from({ length: 256 }, (_, i) => {
-  const h = i >>> 4;
-  const l = i & 0x0f;
-  return `${NIBBLE_STR[h]}${NIBBLE_STR[l]}`;
+/** Maps byte values (0–255) to 2-character hash IDs. */
+const HASHLINE_DICT: string[] = Array.from({ length: 256 }, (_, i) => {
+  const high = i >>> 4;
+  const low = i & 0x0f;
+  return `${NIBBLE_STR[high]}${NIBBLE_STR[low]}`;
 });
 
 /** Lines containing no alphanumeric chars (only punctuation/symbols/whitespace). */
 const RE_SIGNIFICANT = /[\p{L}\p{N}]/u;
 
-function xxh32(input: string, seed = 0): number {
-  if (!XXH) return 0;
-  return XXH.h32(seed).update(input).digest().toNumber() >>> 0;
+// ── Hash computation (from pi-hashline-tools hashline-utils.ts) ────────────
+
+/**
+ * FNV-1a 32-bit hash — used as fallback when Bun.xxHash32 is unavailable.
+ * Ported verbatim from davehardy20/pi-hashline-tools.
+ */
+function fnv1a32(input: string, seed = 0): number {
+  let hash = 0x811c9dc5 ^ seed;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash +=
+      (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return hash >>> 0;
 }
 
-/** Whether hashline computation is available (xxhashjs loaded successfully). */
-export const hashlineAvailable = XXH !== null;
+function computeHash32(normalizedContent: string, seed: number): number {
+  // Bun provides a fast xxHash32 implementation
+  const bun = (globalThis as Record<string, unknown>).Bun as
+    | { hash?: { xxHash32?: (s: string, seed: number) => number } }
+    | undefined;
+  if (bun?.hash?.xxHash32) {
+    return bun.hash.xxHash32(normalizedContent, seed);
+  }
+  return fnv1a32(normalizedContent, seed);
+}
 
 // ── Public API ────────────────────────────────────────────────────────
 
 /**
- * Compute a 2-char hash for a line, matching pi-hashline-edit's algorithm exactly.
+ * Compute a 2-char hash ID for a line, matching pi-hashline-tools' algorithm.
  *
- * Rules:
+ * Rules (ported verbatim):
  * - Strip \r, then trimEnd() only (internal whitespace preserved)
  * - Blank/non-significant lines use line index as seed (unique per line)
  * - Significant lines use seed=0
- * - Low byte of xxh32 is looked up in the ZPMQVRWSNKTXJBYH dictionary
+ * - FNV-1a (or Bun xxHash32) low byte via `% 256` looked up in ZPMQVRWSNKTXJBYH dict
+ *
+ * Returns empty string for blank/whitespace-only lines (owner's convention:
+ * such lines render as `LINE|content` without a hash and cannot be edit anchors).
  */
 export function computeLineHash(lineNumber: number, line: string): string {
-  if (!XXH) {
-    return "??"; // xxhashjs not available — fallback placeholder
-  }
   const cleaned = line.replace(/\r/g, "").trimEnd();
-  let seed = 0;
   if (!RE_SIGNIFICANT.test(cleaned)) {
-    seed = lineNumber;
+    return ""; // blank lines get no hash — matches pi-hashline-tools behavior
   }
-  return DICT[xxh32(cleaned, seed) & 0xff];
+  const hash = computeHash32(cleaned, 0);
+  const index = hash % 256;
+  return HASHLINE_DICT[index];
 }
 
 /**
- * Format a single line in pi-hashline-edit's read() output format:
- *   "  12#MQ:actual line content here"
+ * Format a single line in pi-hashline-tools' read_hashed() output format:
+ *   "12#MQ|actual line content here"
  *
- * Uses `:` (colon) separator — verified identical to pi-hashline-edit
- * formatHashlineRegion() output (hashline.ts:989).
+ * Uses `|` (pipe) separator — verified identical to pi-hashline-tools
+ * formatHashLine(). No left-padding of line numbers (matches owner).
  *
- * lineNumber is left-padded to match the width of the last line number.
+ * Blank/whitespace-only lines render as "LINE|content" (no #HASH).
  */
 export function formatHashlineLine(
   lineNumber: number,
   content: string,
-  lineWidth: number,
 ): string {
-  const paddedLineNumber = String(lineNumber).padStart(lineWidth, " ");
+  const trimmed = content.trim();
+  if (trimmed.length === 0) {
+    return `${lineNumber}|${content}`;
+  }
   const hash = computeLineHash(lineNumber, content);
-  return `${paddedLineNumber}#${hash}:${content}`;
+  return `${lineNumber}#${hash}|${content}`;
 }
 
 /**
  * Format an array of consecutive lines as a hashline region,
- * matching pi-hashline-edit's formatHashlineRegion() output exactly.
- * Output: "  12#MQ:content" with colon separator.
+ * matching pi-hashline-tools' formatHashLines() output exactly.
+ * Output: "12#MQ|content" with pipe separator, no line-number padding.
  */
 export function formatHashlineRegion(
   lines: string[],
   startLine: number,
 ): string {
-  const lineWidth = String(startLine + Math.max(0, lines.length - 1)).length;
   return lines
-    .map((line, index) => formatHashlineLine(startLine + index, line, lineWidth))
+    .map((line, index) => formatHashlineLine(startLine + index, line))
     .join("\n");
 }
+
+/** Whether hashline computation is available (always true — no external deps). */
+export const hashlineAvailable = true;

@@ -4,7 +4,7 @@ Structural code search and replace for Pi using AST matching via [ast-grep](http
 
 ## What it adds
 
-- **`ast_grep_search`** tool — Find code patterns using AST matching. More precise than text search. Supports TypeScript, JavaScript, TSX, Python, Bash, and Swift. Output uses **LINE#HASH anchors** compatible with pi-hashline-edit's `read()`/`edit()` tools for direct editing.
+- **`ast_grep_search`** tool — Find code patterns using AST matching. More precise than text search. Supports TypeScript, JavaScript, TSX, Python, Bash, and Swift. Output uses **LINE#HASH|content** anchors compatible with `@davehardy20/pi-hashline-tools`' `read_hashed()` / `hashline_edit()` tools for direct editing.
 - **`ast_grep_replace`** tool — Find and replace code patterns using AST matching. Safer than text replace because it respects syntax boundaries. Applies changes to files.
 - **`/ast-grep-status`** command — Show package name, version, source path, and supported languages.
 
@@ -23,32 +23,31 @@ See the [ast-grep pattern guide](https://ast-grep.github.io/guide/pattern-syntax
 
 ### Hashline output format
 
-Search results are returned as **LINE#HASH:content** anchors (colon-separated):
+Search results are returned as **LINE#HASH|content** anchors (pipe-separated):
 
 ```
- LINE#HASH  content
+ LINE#HASH|content
 ───────────────────────────────────────
-    12#MQ   def hello(): pass
-    13#XY     pass
+12#MQ|  def hello(): pass
+13#XY|    pass
 ```
 
-#### Compatibility with pi-hashline-edit
+#### Compatibility with @davehardy20/pi-hashline-tools
 
-The hashline output is designed to interoperate with **pi-hashline-edit** (the hash-anchored read/edit extension). The format and algorithm have been **verified against** `pi-hashline-edit@latest` source code:
+The hashline output is designed to interoperate with **@davehardy20/pi-hashline-tools** (the hash-anchored read/edit extension). The format and algorithm have been **ported verbatim** from that package's source:
 
-| Aspect | This PR | pi-hashline-edit | Match |
-|--------|---------|-----------------|-------|
-| Separator | `:` (colon) | `:` (colon) | Yes |
-| Parse regex | `^(\d+)#([A-Z]{2}):(.*)$` | `^([0-9]+)\s*#\s*([^\s:]+)(?:\s*:(.*))?$` | Yes |
-| Hash index | `xxh32 & 0xFF` | `xxh32 & 0xff` | Yes |
+| Aspect | This PR | pi-hashline-tools | Match |
+|--------|---------|-------------------|-------|
+| Separator | `\|` (pipe) | `\|` (pipe) | Yes |
+| Parse regex | `^(\d+)#([ZPMQVRWSNKTXJBYH]{2})\|(.*)$` | `^([0-9]+)#([ZPMQVRWSNKTXJBYH]{2})\|(.*)$` | Yes |
+| Hash function | FNV-1a 32-bit → `% 256` | FNV-1a 32-bit → `% 256` | Yes |
 | Alphabet | `ZPMQVRWSNKTXJBYH` | `ZPMQVRWSNKTXJBYH` | Yes |
-| Blank line seed | Line number (unique per line) | Line number (identical) | Yes |
+| Blank lines | `LINE\|content` (no hash) | `LINE\|content` (no hash) | Yes |
+| Line numbers | Not padded | Not padded | Yes |
 
-> **Note on review concern about pipe separator:** A previous review raised a concern that a `pi-hashline-tools` package uses a pipe (`\|`) separator while this PR uses colon (`:`). Investigation confirmed that **no such `pi-hashline-tools` package exists** in the Pi ecosystem. The correct interoperability target is `pi-hashline-edit`, which uses the **same colon (`:`) separator** as this implementation. The format is byte-for-byte compatible.
+The hashes are content-based 2-character identifiers computed by the same FNV-1a algorithm as pi-hashline-tools. This means you can copy a result line directly into a `hashline_edit()` call — no need to look up line numbers or manually transcribe content.
 
-The hashes are content-based 2-character identifiers computed by the same algorithm as pi-hashline-edit. This means you can copy a result line directly into an `edit()` tool call — no need to look up line numbers or manually transcribe content.
-
-If xxhashjs is unavailable (e.g., in minimal installs), hashes fall back to `??`.
+> **Note on blank lines:** Blank or whitespace-only lines render as `LINE|content` without a hash identifier. These lines cannot be used as edit anchors — this matches pi-hashline-tools' behavior exactly.
 
 ## Install
 
